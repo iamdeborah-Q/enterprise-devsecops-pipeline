@@ -6,9 +6,9 @@ const { pool } = require('../db');
 router.get('/', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT p.*, 
+      `SELECT p.*,
         (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comment_count
-       FROM posts p 
+       FROM posts p
        ORDER BY p.created_at DESC`
     );
     res.json(result.rows);
@@ -51,8 +51,8 @@ router.post('/', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO posts (title, content, author, emoji) 
-       VALUES ($1, $2, $3, $4) 
+      `INSERT INTO posts (title, content, author, emoji)
+       VALUES ($1, $2, $3, $4)
        RETURNING *`,
       [title, content, author || 'Anonymous', emoji || '✨']
     );
@@ -73,9 +73,9 @@ router.put('/:id', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `UPDATE posts 
-       SET title = $1, content = $2, author = $3, emoji = $4, updated_at = NOW() 
-       WHERE id = $5 
+      `UPDATE posts
+       SET title = $1, content = $2, author = $3, emoji = $4, updated_at = NOW()
+       WHERE id = $5
        RETURNING *`,
       [title, content, author || 'Anonymous', emoji || '✨', req.params.id]
     );

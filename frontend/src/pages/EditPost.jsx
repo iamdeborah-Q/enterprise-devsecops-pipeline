@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { getPost, updatePost } from '../api';
 import { HiArrowLeft } from 'react-icons/hi2';
@@ -16,24 +16,27 @@ function EditPost() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    fetchPost();
-  }, [id]);
 
-  const fetchPost = async () => {
-    try {
-      const res = await getPost(id);
-      setTitle(res.data.title);
-      setContent(res.data.content);
-      setAuthor(res.data.author);
-      setEmoji(res.data.emoji || '✨');
-    } catch (err) {
-      toast.error('Post not found 😢');
-      navigate('/');
-    } finally {
-      setLoading(false);
-    }
-  };
+const fetchPost = useCallback(async () => {
+  try {
+    const res = await getPost(id);
+    setTitle(res.data.title);
+    setContent(res.data.content);
+    setAuthor(res.data.author);
+    setEmoji(res.data.emoji || '✨');
+  } catch (err) {
+    console.error('Failed to fetch post:', err);
+    toast.error('Post not found 😢');
+    navigate('/');
+  } finally {
+    setLoading(false);
+  }
+}, [id, navigate]);
+
+useEffect(() => {
+  fetchPost();
+}, [fetchPost]);
+
 
   const handleSubmit = async (e) => {
     e.preventDefault();

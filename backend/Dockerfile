@@ -1,31 +1,36 @@
-# ---- Build stage ----
-FROM node:20-alpine AS build
-WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci --only=production && npm cache clean --force
 
-# ---- Production stage ----
-FROM node:20-alpine AS production
+# ---- Dependencies stage ----
+    FROM node:22-alpine AS build
 
-# Security: run as non-root user
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+    WORKDIR /app
 
-# Security: remove unnecessary packages
-RUN apk --no-cache add dumb-init
+    COPY package.json package-lock.json ./
 
-WORKDIR /app
+    RUN npm ci --omit=dev && npm cache clean --force
 
-# Copy only production dependencies from build stage
-COPY --from=build /app/node_modules ./node_modules
-COPY src/ ./src/
+    # ---- Production stage ----
+    FROM node:22-alpine AS production
 
-# Security: own files by non-root user
-RUN chown -R appuser:appgroup /app
+    ENV NODE_ENV=production
 
-USER appuser
+    # Install dumb-init for proper signal handling
+    RUN apk add --no-cache dumb-init
 
-EXPOSE 5000
+    # Create non-root application user
+    RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-# Security: use dumb-init for proper signal handling (PID 1 problem)
-ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "src/index.js"]
+    WORKDIR /app
+
+    # Copy production dependencies
+    COPY --from=build --chown=appuser:appgroup /app/node_modules ./node_modules
+
+    # Copy application source
+    COPY --chown=appuser:appgroup src/ ./src/
+
+    USER appuser
+
+    EXPOSE 5000
+
+    ENTRYPOINT ["dumb-init", "--"]
+
+    CMD ["node", "src/index.js"]
