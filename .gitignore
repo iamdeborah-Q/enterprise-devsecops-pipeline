@@ -16,3 +16,26 @@ terraform/crash.log
 # OS
 .DS_Store
 Thumbs.db
+
+# Terraform local files
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+
+# Keep Terraform dependency lock files tracked
+!**/.terraform.lock.hcl
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Node.js
+node_modules/
+dist/
+coverage/
