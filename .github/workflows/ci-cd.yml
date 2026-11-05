@@ -205,7 +205,7 @@ jobs:
           exit-code: '1'
           format: table
           version: v0.76.1
-  # ==============================================================
+   # ==============================================================
   # STAGE 3: Build & Push Container Images
   # ==============================================================
   build:
@@ -213,17 +213,10 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - sca
-      - opa-conftest
-      - trivy-dockerfile
 
     permissions:
       contents: read
       packages: write
-
-    strategy:
-      fail-fast: false
-      matrix:
-        component: [backend, frontend]
 
     steps:
       - name: Checkout code
@@ -240,25 +233,251 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels)
-        id: meta
+      - name: Extract backend metadata
+        id: backend_meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}/jerney-${{ matrix.component }}
+          images: ghcr.io/${{ github.repository }}/jerney-backend
           tags: |
             type=sha,prefix=
             type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push image
+      - name: Build and push backend
         uses: docker/build-push-action@v6
         with:
-          context: ./${{ matrix.component }}
-          file: ./${{ matrix.component }}/Dockerfile
+          context: ./backend
+          file: ./backend/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.backend_meta.outputs.tags }}
+          labels: ${{ steps.backend_meta.outputs.labels }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
           provenance: true
           sbom: true
+
+      - name: Extract frontend metadata
+        id: frontend_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/jerney-frontend
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.frontend_meta.outputs.tags }}
+          labels: ${{ steps.frontend_meta.outputs.labels }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+          provenance: true
+          sbom: true
+
+
+  # ==============================================================
+  # STAGE 4: Kubernetes Vulnerability Scanning
+  # ==============================================================
+
+  kubernetes-vulnerability-scan:
+    name: Kubernetes Security Assessment
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 5
+
+    steps:
+      - name: Initialize Kubernetes vulnerability scanning
+        run: echo "Starting Kubernetes security assessments"
+
+  # ==============================================================
+  # KubeSec - Kubernetes Security Configuration
+  # ==============================================================
+
+  kubesec:
+    name: KubeSec Scan
+    runs-on: ubuntu-latest
+    needs: kubernetes-vulnerability-scan
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run KubeSec
+        run: |
+          docker run --rm \
+            -v "$PWD/k8s:/manifests:ro" \
+            kubesec/kubesec:latest \
+            scan /manifests/backend.yaml \
+                 /manifests/frontend.yaml \
+                 /manifests/postgres.yaml \
+            > kubesec-report.json
+
+      - name: Evaluate KubeSec results
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("kubesec-report.json").read_text())
+          if not isinstance(data, list) or not data:
+              raise SystemExit("No KubeSec results returned")
+
+          failed = False
+          for result in data:
+              score = result.get("score", 0)
+              print(f"KubeSec score: {score}")
+              if score <= 0:
+                  failed = True
+
+          if failed:
+              raise SystemExit("KubeSec security gate failed")
+          PY
+
+      - name: Upload KubeSec report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubesec-report
+          path: kubesec-report.json
+          if-no-files-found: warn
+
+  # ==============================================================
+  # OPA Conftest - Kubernetes Policy Enforcement
+  # ==============================================================
+
+  opa-kubernetes:
+    name: OPA Scan
+    runs-on: ubuntu-latest
+    needs: kubernetes-vulnerability-scan
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Conftest
+        run: |
+          VERSION="0.64.0"
+          curl -fsSL \
+            "https://github.com/open-policy-agent/conftest/releases/download/v${VERSION}/conftest_${VERSION}_Linux_x86_64.tar.gz" \
+            -o conftest.tar.gz
+          tar -xzf conftest.tar.gz conftest
+          sudo install conftest /usr/local/bin/conftest
+
+      - name: Run Kubernetes OPA policies
+        run: |
+          test -d policy/kubernetes || {
+            echo "::error::Missing policy/kubernetes directory"
+            exit 1
+          }
+
+          conftest test k8s/*.yaml \
+            --policy policy/kubernetes \
+            --output json > opa-kubernetes-report.json
+
+      - name: Upload OPA report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opa-kubernetes-report
+          path: opa-kubernetes-report.json
+          if-no-files-found: warn
+
+  # ==============================================================
+  # Trivy - Kubernetes Manifest Misconfiguration
+  # ==============================================================
+
+  trivy-kubernetes:
+    name: Trivy Scan
+    runs-on: ubuntu-latest
+    needs: kubernetes-vulnerability-scan
+    timeout-minutes: 20
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scan Kubernetes manifests
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: config
+          scan-ref: k8s/
+          format: sarif
+          output: trivy-kubernetes.sarif
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
+      - name: Upload Trivy SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-kubernetes-sarif
+          path: trivy-kubernetes.sarif
+          if-no-files-found: warn
+
+  # ==============================================================
+  # Checkov - Terraform and Kubernetes IaC
+  # ==============================================================
+
+  checkov-kubernetes:
+    name: IaC Scan
+    runs-on: ubuntu-latest
+    needs: kubernetes-vulnerability-scan
+    timeout-minutes: 20
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Checkov
+        run: python -m pip install checkov
+
+      - name: Scan Terraform
+        run: |
+          checkov \
+            --directory terraform \
+            --framework terraform \
+            --output json \
+            --output-file-path checkov-terraform.json
+
+      - name: Scan Kubernetes manifests
+        if: always()
+        run: |
+          checkov \
+            --directory k8s \
+            --framework kubernetes \
+            --output json \
+            --output-file-path checkov-kubernetes.json
+
+      - name: Upload Checkov reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkov-iac-reports
+          path: |
+            checkov-terraform.json
+            checkov-kubernetes.json
+          if-no-files-found: warn
