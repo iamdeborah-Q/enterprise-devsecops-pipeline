@@ -1,11 +1,12 @@
+
 name: Pre-commit Security Checks
 
 on:
-  pull_request:
-    branches: [main]
-
   push:
-    branches: [main]
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
 
 permissions:
   contents: read
