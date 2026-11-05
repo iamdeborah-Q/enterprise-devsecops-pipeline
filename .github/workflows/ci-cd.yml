@@ -69,6 +69,7 @@ jobs:
 
     permissions:
       contents: read
+      security-events: write
 
     steps:
       - name: Checkout repository
@@ -83,15 +84,33 @@ jobs:
         run: python -m pip install semgrep
 
       - name: Run Semgrep SAST
+        id: semgrep
         run: |
           semgrep scan \
             --config p/javascript \
             --config p/typescript \
             --config p/security-audit \
+            --sarif \
+            --output semgrep.sarif \
             --error \
             --exclude node_modules \
             --exclude dist \
             backend frontend
+
+      - name: Upload Semgrep SARIF to GitHub Code Scanning
+        if: ${{ !cancelled() && hashFiles('semgrep.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+      - name: Save Semgrep report as artifact
+        if: ${{ !cancelled() && hashFiles('semgrep.sarif') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-sarif-report
+          path: semgrep.sarif
+          retention-days: 30
 
     # STAGE 2B: Vulnerability Scan - Docker
 
