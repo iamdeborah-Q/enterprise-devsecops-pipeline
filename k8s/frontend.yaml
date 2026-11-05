@@ -15,12 +15,19 @@ spec:
         app: frontend
     spec:
       automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        fsGroup: 10001
+
       containers:
         - name: frontend
-          image: deesecurity/jerney-frontend:v1
+          image: deesecurity/jerney-frontend@sha256:af25a0b01fb843842343ef7df914589d3d513ac3af1ae8ea3482a540f749c2be:<digest>
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
               protocol: TCP
+
           resources:
             requests:
               cpu: 100m
@@ -28,11 +35,30 @@ spec:
             limits:
               cpu: 250m
               memory: 128Mi
+
           securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
             capabilities:
               drop:
                 - ALL
+
+          volumeMounts:
+            - name: nginx-run
+              mountPath: /run
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+
+      volumes:
+        - name: nginx-run
+          emptyDir:
+            medium: Memory
+        - name: nginx-cache
+          emptyDir:
+            medium: Memory
 
 ---
 apiVersion: v1

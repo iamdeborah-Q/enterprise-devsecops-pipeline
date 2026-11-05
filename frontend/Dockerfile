@@ -19,16 +19,17 @@ RUN rm -f /etc/nginx/conf.d/default.conf
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Copy the Vite build output (dist folder) into Nginx
 COPY --from=build /app/dist /usr/share/nginx/html
 
-RUN chown -R nginx:nginx /usr/share/nginx/html \
-    /var/cache/nginx \
-    /var/log/nginx \
+RUN mkdir -p /var/cache/nginx /var/log/nginx /var/run \
     && touch /var/run/nginx.pid \
-    && chown nginx:nginx /var/run/nginx.pid
+    && chown -R 10001:10001 \
+       /usr/share/nginx/html \
+       /var/cache/nginx \
+       /var/log/nginx \
+       /var/run/nginx.pid
 
-USER nginx
+USER 10001:10001
 
 EXPOSE 8080
 

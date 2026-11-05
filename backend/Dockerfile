@@ -16,8 +16,9 @@
     # Install dumb-init for proper signal handling
     RUN apk add --no-cache dumb-init
 
-    # Create non-root application user
-    RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+    # Create non-root application user with fixed UID/GID
+    RUN addgroup -S -g 10001 appgroup \
+        && adduser -S -D -u 10001 -G appgroup appuser
 
     WORKDIR /app
 
@@ -27,7 +28,11 @@
     # Copy application source
     COPY --chown=appuser:appgroup src/ ./src/
 
-    USER appuser
+    # Create writable uploads directory
+    RUN mkdir -p /app/uploads \
+        && chown -R 10001:10001 /app/uploads
+
+    USER 10001:10001
 
     EXPOSE 5000
 
