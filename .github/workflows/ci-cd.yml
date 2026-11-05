@@ -6,24 +6,33 @@
 # ============================================================
 
 
+# Stage 1
+
 
 name: Jerney CI/CD Pipeline
 
 on:
   push:
-    branches: [main]
+    branches: ["*"]
   pull_request:
-    branches: [main]
+    branches: ["*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  lint:
-    name: ESLint - ${{ matrix.service }}
+  code-quality:
+    name: Code Quality - ${{ matrix.service }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     strategy:
+      fail-fast: false
       matrix:
         service: [backend, frontend]
 
@@ -38,7 +47,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22.18.0'
           cache: npm
           cache-dependency-path: ${{ matrix.service }}/package-lock.json
 
@@ -47,3 +56,7 @@ jobs:
 
       - name: Run ESLint
         run: npm run lint -- --max-warnings 0
+
+      - name: Build frontend
+        if: matrix.service == 'frontend'
+        run: npm run build
