@@ -13,9 +13,9 @@ name: Jerney CI/CD Pipeline
 
 on:
   push:
-    branches: ["*"]
+    branches: ["**"]
   pull_request:
-    branches: ["*"]
+    branches: ["**"]
   workflow_dispatch:
 
 permissions:
@@ -60,3 +60,205 @@ jobs:
       - name: Build frontend
         if: matrix.service == 'frontend'
         run: npm run build
+
+  sast:
+    name: SAST - Semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: code-quality
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Semgrep
+        run: python -m pip install semgrep
+
+      - name: Run Semgrep SAST
+        id: semgrep
+        run: |
+          semgrep scan \
+            --config p/javascript \
+            --config p/typescript \
+            --config p/security-audit \
+            --sarif \
+            --output semgrep.sarif \
+            --error \
+            --exclude node_modules \
+            --exclude dist \
+            backend frontend
+
+      - name: Upload Semgrep SARIF to GitHub Code Scanning
+        if: ${{ !cancelled() && hashFiles('semgrep.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+      - name: Save Semgrep report as artifact
+        if: ${{ !cancelled() && hashFiles('semgrep.sarif') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-sarif-report
+          path: semgrep.sarif
+          retention-days: 30
+
+    # STAGE 2B: Vulnerability Scan - Docker
+
+  vulnerability-scan:
+    name: Vulnerability Scan - Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: sast
+
+    steps:
+      - name: Initialize vulnerability scanning
+        run: echo "Starting parallel security scans"
+
+  # STAGE 2B: Dependency Scanning
+  sca:
+    name: Dependency Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: vulnerability-scan
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Audit backend dependencies
+        working-directory: backend
+        run: npm audit --audit-level=high
+
+      - name: Audit frontend dependencies
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
+  # STAGE 2C: OPA Policy Enforcement
+  opa-conftest:
+    name: OPA Conftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: vulnerability-scan
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Conftest
+        run: |
+          wget -q https://github.com/open-policy-agent/conftest/releases/download/v0.64.0/conftest_0.64.0_Linux_x86_64.tar.gz
+          tar xzf conftest_0.64.0_Linux_x86_64.tar.gz conftest
+          sudo install conftest /usr/local/bin/conftest
+
+      - name: Validate backend Dockerfile
+        run: conftest test backend/Dockerfile --policy policy
+
+      - name: Validate frontend Dockerfile
+        run: conftest test frontend/Dockerfile --policy policy
+
+  # STAGE 2D: Trivy Dockerfile Scanning
+  trivy-dockerfile:
+    name: Trivy Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: vulnerability-scan
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scan backend Dockerfile
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: config
+          scan-ref: backend/Dockerfile
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          format: table
+          version: v0.76.1
+
+      - name: Scan frontend Dockerfile
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: config
+          scan-ref: frontend/Dockerfile
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          format: table
+          version: v0.76.1
+  # ==============================================================
+  # STAGE 3: Build & Push Container Images
+  # ==============================================================
+  build:
+    name: "🐳 Build & Push ${{ matrix.component }}"
+    runs-on: ubuntu-latest
+    needs:
+      - sca
+      - opa-conftest
+      - trivy-dockerfile
+
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [backend, frontend]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/jerney-${{ matrix.component }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.component }}
+          file: ./${{ matrix.component }}/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true

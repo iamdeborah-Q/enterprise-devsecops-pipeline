@@ -34,6 +34,7 @@ crash.*.log
 .env
 .env.*
 !.env.example
+*.sarif
 
 # Node.js
 node_modules/
