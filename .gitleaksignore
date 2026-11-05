@@ -1,0 +1,8 @@
+# JERNY historical credential findings
+# Original commit: 592eb66
+# Historical Kubernetes lab environment destroyed.
+# Historical PostgreSQL password must never be reused.
+# These exceptions apply only to the exact findings below.
+
+592eb66b0719eb717cfaefddf0c5a4cdc7a1d5df:k8s/jerney.yaml:kubernetes-secret-yaml:23
+592eb66b0719eb717cfaefddf0c5a4cdc7a1d5df:k8s/jerney.yaml:generic-api-key:32
