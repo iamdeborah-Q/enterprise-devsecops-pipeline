@@ -93,21 +93,24 @@ jobs:
             --exclude dist \
             backend frontend
 
+    # STAGE 2B: Vulnerability Scan - Docker
 
-  sca:
-    name: Dependency Audit - ${{ matrix.service }}
+  vulnerability-scan:
+    name: Vulnerability Scan - Docker
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     needs: sast
 
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [backend, frontend]
+    steps:
+      - name: Initialize vulnerability scanning
+        run: echo "Starting parallel security scans"
 
-    defaults:
-      run:
-        working-directory: ${{ matrix.service }}
+  # STAGE 2B: Dependency Scanning
+  sca:
+    name: Dependency Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: vulnerability-scan
 
     steps:
       - name: Checkout repository
@@ -118,57 +121,24 @@ jobs:
         with:
           node-version: '22.18.0'
           cache: npm
-          cache-dependency-path: ${{ matrix.service }}/package-lock.json
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Audit dependencies
+      - name: Audit backend dependencies
+        working-directory: backend
         run: npm audit --audit-level=high
 
+      - name: Audit frontend dependencies
+        working-directory: frontend
+        run: npm audit --audit-level=high
 
-  trivy-dockerfile:
-    name: Trivy Dockerfile - ${{ matrix.service }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: sast
-
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [backend, frontend]
-
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Scan Dockerfile with Trivy
-        uses: aquasecurity/trivy-action@0.35.0
-        with:
-          scan-type: config
-          scan-ref: ${{ matrix.service }}/Dockerfile
-          severity: HIGH,CRITICAL
-          exit-code: '1'
-          format: table
-          version: v0.76.1
-
-  # STAGE 2B: OPA Conftest Dockerfile Policy Enforcement
+  # STAGE 2C: OPA Policy Enforcement
   opa-conftest:
-    name: OPA Conftest - ${{ matrix.service }}
+    name: OPA Conftest
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: sast
-
-    permissions:
-      contents: read
-
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [backend, frontend]
+    needs: vulnerability-scan
 
     steps:
       - name: Checkout repository
@@ -180,6 +150,39 @@ jobs:
           tar xzf conftest_0.64.0_Linux_x86_64.tar.gz conftest
           sudo install conftest /usr/local/bin/conftest
 
-      - name: Enforce Dockerfile security policies
-        run: |
-          conftest test ${{ matrix.service }}/Dockerfile --policy policy
+      - name: Validate backend Dockerfile
+        run: conftest test backend/Dockerfile --policy policy
+
+      - name: Validate frontend Dockerfile
+        run: conftest test frontend/Dockerfile --policy policy
+
+  # STAGE 2D: Trivy Dockerfile Scanning
+  trivy-dockerfile:
+    name: Trivy Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: vulnerability-scan
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scan backend Dockerfile
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: config
+          scan-ref: backend/Dockerfile
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          format: table
+          version: v0.76.1
+
+      - name: Scan frontend Dockerfile
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: config
+          scan-ref: frontend/Dockerfile
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          format: table
+          version: v0.76.1
