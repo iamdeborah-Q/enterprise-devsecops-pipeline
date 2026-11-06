@@ -22,7 +22,7 @@ spec:
 
       containers:
         - name: frontend
-          image: deesecurity/jerney-frontend@sha256:af25a0b01fb843842343ef7df914589d3d513ac3af1ae8ea3482a540f749c2be:<digest>
+          image: deesecurity/jerney-frontend@sha256:af25a0b01fb843842343ef7df914589d3d513ac3af1ae8ea3482a540f749c2be
           imagePullPolicy: Always
           ports:
             - containerPort: 8080

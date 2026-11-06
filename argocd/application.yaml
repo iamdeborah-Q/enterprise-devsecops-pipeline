@@ -1,0 +1,21 @@
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: jerney
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/iamdeborah-Q/enterprise-devsecops-pipeline.git
+    targetRevision: feature/vulnerability-scanning
+    path: k8s/overlays/local
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: jerney
+
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true

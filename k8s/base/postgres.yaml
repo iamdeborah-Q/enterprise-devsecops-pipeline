@@ -20,7 +20,7 @@ spec:
       securityContext:
         seccompProfile:
           type: RuntimeDefault
-        fsGroup: 70
+        fsGroup: 10001
       containers:
         - name: postgres
           image: postgres@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
@@ -33,6 +33,8 @@ spec:
               value: /etc/jerney/secrets/POSTGRES_PASSWORD
             - name: POSTGRES_DB_FILE
               value: /etc/jerney/secrets/POSTGRES_DB
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
 
           volumeMounts:
             - name: postgres-storage
