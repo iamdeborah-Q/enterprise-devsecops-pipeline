@@ -17,9 +17,14 @@ spec:
         app: backend
     spec:
       automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        fsGroup: 70
       containers:
         - name: backend
-          image: deesecurity/jerney-backend:v1
+          image: deesecurity/jerney-backend@sha256:8b249486c8ba35634c68c5b74339bde131a20ddae00e9c09222bdbb6630fdb0a
+          imagePullPolicy: Always
           ports:
             - containerPort: 5000
           env:
@@ -31,40 +36,42 @@ spec:
               value: "postgres"
             - name: DB_PORT
               value: "5432"
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: jerney-db-secret
-                  key: POSTGRES_USER
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: jerney-db-secret
-                  key: POSTGRES_PASSWORD
-            - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: jerney-db-secret
-                  key: POSTGRES_DB
+            - name: DB_USER_FILE
+              value: "/etc/jerney/secrets/POSTGRES_USER"
+            - name: DB_PASSWORD_FILE
+              value: "/etc/jerney/secrets/POSTGRES_PASSWORD"
+            - name: DB_NAME_FILE
+              value: "/etc/jerney/secrets/POSTGRES_DB"
           volumeMounts:
             - name: backend-storage
               mountPath: /app/uploads
+            - name: db-secrets
+              mountPath: /etc/jerney/secrets
+              readOnly: true
           resources:
             requests:
               cpu: 100m
               memory: 128Mi
             limits:
+              cpu: 500m
               memory: 256Mi
           securityContext:
             runAsNonRoot: true
-            runAsUser: 1000
+            runAsUser: 10001
+            runAsGroup: 10001
+            readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
             capabilities:
-              drop: ["ALL"]
+              drop:
+                - ALL
       volumes:
         - name: backend-storage
           persistentVolumeClaim:
             claimName: backend-pvc
+        - name: db-secrets
+          secret:
+            secretName: jerney-db-secret
+            defaultMode: 0440
 
 ---
 apiVersion: v1

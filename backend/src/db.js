@@ -1,11 +1,22 @@
+
+const fs = require('node:fs'); // ADDED
 const { Pool } = require('pg');
 
+// ADDED: Read credentials from Kubernetes Secret files
+function readSecret(filePath, envName) {
+  if (filePath) {
+    return fs.readFileSync(filePath, 'utf8').trimEnd();
+  }
+
+  return process.env[envName];
+}
+
 const pool = new Pool({
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
+  user: readSecret(process.env.DB_USER_FILE, 'DB_USER'), // FIXED
+  password: readSecret(process.env.DB_PASSWORD_FILE, 'DB_PASSWORD'), // FIXED
   host: process.env.DB_HOST,
   port: parseInt(process.env.DB_PORT, 10),
-  database: process.env.DB_NAME,
+  database: readSecret(process.env.DB_NAME_FILE, 'DB_NAME'), // FIXED
 });
 
 async function initDB() {
