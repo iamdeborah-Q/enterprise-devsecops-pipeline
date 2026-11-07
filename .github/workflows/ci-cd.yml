@@ -311,15 +311,67 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+
       - name: Run KubeSec
+        shell: bash
         run: |
-          docker run --rm \
-            -v "$PWD/k8s:/manifests:ro" \
-            kubesec/kubesec:latest \
-            scan /manifests/backend.yaml \
-                 /manifests/frontend.yaml \
-                 /manifests/postgres.yaml \
-            > kubesec-report.json
+          set -euo pipefail
+
+          for app in backend frontend postgres; do
+            echo "Scanning ${app} Kubernetes manifest..."
+
+            set +e
+            docker run --rm \
+              -v "$PWD/k8s:/manifests:ro" \
+              kubesec/kubesec:latest \
+              scan "/manifests/base/${app}.yaml" \
+              > "kubesec-${app}.json"
+            status=$?
+            set -e
+
+            echo "KubeSec exit code for ${app}: ${status}"
+
+            if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+              echo "KubeSec execution failed for ${app}"
+              exit 1
+            fi
+
+            python3 -m json.tool "kubesec-${app}.json" > /dev/null
+          done
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          combined = []
+
+          for app in ("backend", "frontend", "postgres"):
+              path = Path(f"kubesec-{app}.json")
+              results = json.loads(path.read_text())
+
+              if not isinstance(results, list) or not results:
+                  raise SystemExit(f"Missing KubeSec results for {app}")
+
+              expected = f"Deployment/{app}.jerney"
+              matches = [
+                  r for r in results
+                  if r.get("object") == expected
+              ]
+
+              if len(matches) != 1:
+                  raise SystemExit(
+                      f"Expected exactly one {expected}, found {len(matches)}"
+                  )
+
+              combined.extend(results)
+
+          Path("kubesec-report.json").write_text(
+              json.dumps(combined, indent=2)
+          )
+
+          print("Combined KubeSec report generated")
+          PY
+
 
       - name: Evaluate KubeSec results
         run: |
@@ -328,27 +380,63 @@ jobs:
           from pathlib import Path
 
           data = json.loads(Path("kubesec-report.json").read_text())
+
           if not isinstance(data, list) or not data:
               raise SystemExit("No KubeSec results returned")
 
+          expected = {
+              "Deployment/backend.jerney",
+              "Deployment/frontend.jerney",
+              "Deployment/postgres.jerney",
+          }
+
+          passed = set()
           failed = False
+
           for result in data:
+              resource = result.get("object", "unknown")
+              valid = result.get("valid", False)
+              message = result.get("message", "")
               score = result.get("score", 0)
-              print(f"KubeSec score: {score}")
-              if score <= 0:
+
+              if not valid:
+                  if (
+                      resource not in expected
+                      and message.startswith("could not find schema for ")
+                  ):
+                      print(f"SKIPPED unsupported resource: {resource}")
+                      continue
+
+                  print(f"FAILED invalid resource: {resource}: {message}")
                   failed = True
+                  continue
+
+              print(f"{resource}: score={score}")
+
+              if (
+                  isinstance(score, bool)
+                  or not isinstance(score, (int, float))
+                  or score <= 0
+              ):
+                  print(f"FAILED security gate: {resource}")
+                  failed = True
+              elif resource in expected:
+                  if resource in passed:
+                      print(f"FAILED duplicate resource: {resource}")
+                      failed = True
+                  passed.add(resource)
+
+          missing = expected - passed
+
+          if missing:
+              print(f"FAILED missing Deployments: {sorted(missing)}")
+              failed = True
 
           if failed:
               raise SystemExit("KubeSec security gate failed")
-          PY
 
-      - name: Upload KubeSec report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: kubesec-report
-          path: kubesec-report.json
-          if-no-files-found: warn
+          print("KubeSec security gate passed: all 3 Deployments verified")
+          PY
 
   # ==============================================================
   # OPA Conftest - Kubernetes Policy Enforcement
@@ -383,7 +471,7 @@ jobs:
             exit 1
           }
 
-          conftest test k8s/*.yaml \
+          conftest test k8s/base/*.yaml \
             --policy policy/kubernetes \
             --output json > opa-kubernetes-report.json
 
@@ -413,7 +501,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Scan Kubernetes manifests
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           scan-type: config
           scan-ref: k8s/
@@ -481,3 +569,52 @@ jobs:
             checkov-terraform.json
             checkov-kubernetes.json
           if-no-files-found: warn
+
+  # ==============================================================
+  # STAGE 5: Kubernetes Deployment - DEV
+  # ==============================================================
+
+  k8s-deployment-dev:
+    name: K8s Deployment DEV
+    runs-on: ubuntu-latest
+    needs:
+      - kubesec
+      - opa-kubernetes
+      - trivy-kubernetes
+      - checkov-kubernetes
+
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/feature/vulnerability-scanning'
+
+    environment: development
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Kustomize
+        uses: imranismail/setup-kustomize@v2
+        with:
+          kustomize-version: '5.5.0'
+
+      - name: Validate DEV Kubernetes Manifests
+        run: |
+          set -euo pipefail
+          kustomize build k8s/overlays/local > /tmp/jerney-dev.yaml
+          test -s /tmp/jerney-dev.yaml
+          echo "DEV Kubernetes manifests validated successfully."
+
+      - name: Verify Argo CD GitOps Configuration
+        run: |
+          test -f argocd/application.yaml
+          echo "Argo CD application configuration found."
+
+      - name: DEV Deployment Gate
+        run: |
+          echo "K8s Deployment DEV"
+          echo "All required security scans passed."
+          echo "DEV Kubernetes manifests validated."
+          echo "Argo CD synchronization requires approval."
+          echo "No live deployment triggered."
